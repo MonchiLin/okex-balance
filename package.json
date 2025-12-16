@@ -11,7 +11,8 @@
     "dev:worker": "wrangler dev -c wrangler.collector.toml --remote",
     "deploy:worker": "wrangler deploy -c wrangler.collector.toml",
     "db:reset": "wrangler d1 execute okex-trader-db --file db/schema.sql --remote",
-    "astro": "astro"
+    "astro": "astro",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^12.6.12",

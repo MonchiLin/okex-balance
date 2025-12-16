@@ -110,9 +110,16 @@ wrangler secret put ADMIN_PASSWORD
 # 输入你想设置的密码，例如 mysecret123
 ```
 
+### 设置报警推送 (PushPlus)
+若需要微信接收资金异动报警，请在 PushPlus 官网注册并获取 Token，然后设置：
+```bash
+wrangler secret put PUSHPLUS_TOKEN
+# 输入你的 PushPlus Token
+```
+
 ---
 
 ## 🔗 参考 API 数据源
 
-- **列表与 AUM**: `/api/v5/copytrading/public-lead-traders?instType=SWAP`
-- **详细指标**: `/api/v5/copytrading/public-stats?instType=SWAP&uniqueCode=xxx`
+- **列表与 AUM**: `https://www.okx.com/api/v5/copytrading/public-lead-traders?instType=SWAP`
+- **详细指标**: `https://www.okx.com/api/v5/copytrading/public-stats?instType=SWAP&uniqueCode=xxx`

@@ -1,6 +1,11 @@
 interface Env {
     DB: D1Database;
+    PUSHPLUS_TOKEN?: string;
 }
+
+// Config constants
+const ALERT_THRESHOLD_PCT = 0.05; // 5%
+// const ALERT_THRESHOLD_PCT = 0.05; // 5%
 
 export default {
     async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -61,6 +66,7 @@ async function collectWatched(env: Env) {
     );
 
     if (watched.length === 0) {
+        // console.log('No watched traders');
         return { message: 'No watched traders', watchedCount: 0 };
     }
 
@@ -68,13 +74,65 @@ async function collectWatched(env: Env) {
     const bucketMs = 5 * 60 * 1000;
     const bucket = Math.floor(now / bucketMs) * bucketMs;
 
-    const leadMap = await fetchLeadTraderMap(watched);
+    // Parallel Fetch: Lead Map + Stats List + History Snapshots
+    const [leadMap, statsList, history5m, history1h] = await Promise.all([
+        fetchLeadTraderMap(watched),
+        mapLimit(watched, 2, async (instId) => {
+            const stats = await fetchPublicStats(instId);
+            return { instId, stats };
+        }),
+        fetchSnapshot(env, watched, bucket - bucketMs),      // 5 min ago
+        fetchSnapshot(env, watched, bucket - 12 * bucketMs)  // 1 hour ago
+    ]);
 
-    const statsList = await mapLimit(watched, 2, async (instId) => {
-        const stats = await fetchPublicStats(instId);
-        return { instId, stats };
-    });
     const statsMap = new Map(statsList.map((x) => [x.instId, x.stats]));
+
+    // --- Change Detection Logic ---
+    const traderAlerts = new Map<string, string[]>();
+
+    for (const instId of watched) {
+        const lead = leadMap.get(instId);
+        const stats = statsMap.get(instId);
+        if (!lead || !stats) continue;
+
+        const currentAum = lead.aum + stats.investAmt; // totalAum
+        const currentUsers = lead.copyTraderNum; // (unused but kept for ref)
+
+        if (!traderAlerts.has(instId)) {
+            traderAlerts.set(instId, []);
+        }
+        const msgs = traderAlerts.get(instId)!;
+
+        // Check 5 min change
+        checkChange(msgs, '5分钟', currentAum, lead.aum, history5m.get(instId));
+        // Check 1 hour change
+        checkChange(msgs, '1小时', currentAum, lead.aum, history1h.get(instId));
+    }
+
+    // Filter out empty traders
+    const activeAlerts: string[] = [];
+    for (const [instId, msgs] of traderAlerts) {
+        if (msgs.length > 0) {
+            const lead = leadMap.get(instId);
+            activeAlerts.push(`👤 <b>${lead?.nickName ?? instId}</b>:<br/>${msgs.join('<br/>')}`);
+        }
+    }
+
+    if (activeAlerts.length > 0) {
+        const timeStr = new Date(now + 8 * 3600 * 1000).toISOString().replace('T', ' ').substring(0, 19); // Simple China Time
+        const title = `🚨 资金异动报警 ${timeStr}`;
+        const content = activeAlerts.join('<br/><br/>');
+
+        console.log('--- ALERTS TRIGGERED ---');
+        console.log(content);
+
+        if (env.PUSHPLUS_TOKEN) {
+            await sendPushPlus(env.PUSHPLUS_TOKEN, title, content);
+        } else {
+            console.log('Skipping PushPlus notification: PUSHPLUS_TOKEN not set');
+        }
+    }
+    // ------------------------------
 
     const stmtInfo = env.DB.prepare(
         `INSERT INTO trader_info (instId, nickName, ccy, leadDays, copyTraderNum, maxCopyTraderNum, avatarUrl, traderInsts, uTime)
@@ -108,7 +166,7 @@ async function collectWatched(env: Env) {
 
     const stmtTouchWatched = env.DB.prepare('UPDATE watched_traders SET updatedAt = ? WHERE instId = ?');
 
-    const batch: D1PreparedStatement[] = [];
+    const batch = [];
     for (const instId of watched) {
         const lead = leadMap.get(instId);
         if (!lead) throw new Error(`Watched trader not found in OKX lead-traders list: ${instId}`);
@@ -153,8 +211,73 @@ async function collectWatched(env: Env) {
         await env.DB.batch(batch.slice(i, i + chunkSize));
     }
 
-    return { message: 'Success', watchedCount: watched.length, timestamp: bucket };
+    return { message: 'Success', watchedCount: watched.length, timestamp: bucket, alertsCount: activeAlerts.length };
 }
+
+// --- Helper Functions for Detection ---
+
+type Snapshot = { aum: number; investAmt: number; copyTraderNum: number };
+
+async function fetchSnapshot(env: Env, instIds: string[], timestamp: number): Promise<Map<string, Snapshot>> {
+    if (instIds.length === 0) return new Map();
+    // we only have metrics, so we construct snapshot with available data
+    const placeholders = instIds.map(() => '?').join(',');
+    const stmt = env.DB.prepare(
+        `SELECT instId, aum, investAmt FROM watched_trader_metrics WHERE timestamp = ? AND instId IN (${placeholders})`
+    ).bind(timestamp, ...instIds);
+
+    const res = await stmt.all();
+    const map = new Map<string, Snapshot>();
+    if (res.results) {
+        for (const r of res.results as any[]) {
+            map.set(r.instId, { aum: r.aum, investAmt: r.investAmt, copyTraderNum: 0 });
+        }
+    }
+    return map;
+}
+
+function checkChange(
+    msgs: string[],
+    label: string,
+    currentTotalAum: number, // Total (Trader + Copy)
+    currentScaleAum: number, // Scale (Copy Only)
+    old: Snapshot | undefined
+) {
+    if (!old) {
+        // console.log(`[${label}] No history`);
+        return;
+    }
+
+    // 1. Total AUM Check
+    const oldTotalAum = old.aum + old.investAmt;
+    const deltaTotal = currentTotalAum - oldTotalAum;
+
+    if (oldTotalAum > 0) {
+        const pct = deltaTotal / oldTotalAum;
+        if (Math.abs(pct) >= ALERT_THRESHOLD_PCT) {
+            const dir = pct > 0 ? "📈 暴涨" : "📉 暴跌";
+            msgs.push(`[${label}] 总资产: ${formatMoney(oldTotalAum)} -> ${formatMoney(currentTotalAum)} (${dir} ${(pct * 100).toFixed(1)}%)`);
+        }
+    }
+
+    // 2. Scale AUM Check
+    const oldScaleAum = old.aum;
+    const deltaScale = currentScaleAum - oldScaleAum;
+
+    if (oldScaleAum > 0) {
+        const pct = deltaScale / oldScaleAum;
+        if (Math.abs(pct) >= ALERT_THRESHOLD_PCT) {
+            const dir = pct > 0 ? "📈 暴涨" : "📉 暴跌";
+            msgs.push(`[${label}] 带单规模: ${formatMoney(oldScaleAum)} -> ${formatMoney(currentScaleAum)} (${dir} ${(pct * 100).toFixed(1)}%)`);
+        }
+    }
+}
+
+function formatMoney(val: number) {
+    return val.toFixed(0);
+}
+
+// --------------------------------------
 
 async function fetchLeadTraderMap(instIds: string[]): Promise<Map<string, OkxLeadTraderRow>> {
     const wanted = new Set(instIds);
@@ -307,4 +430,32 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: nu
 
     await Promise.all(workers);
     return results;
+}
+
+// PushPlus Notification
+async function sendPushPlus(token: string, title: string, content: string): Promise<void> {
+    const url = 'https://www.pushplus.plus/send';
+    const body = {
+        token,
+        title,
+        content,
+        template: 'html',
+        channel: 'wechat'
+    };
+
+    try {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const json: any = await resp.json();
+        if (json?.code !== 200) {
+            console.error('PushPlus Error:', json);
+        } else {
+            console.log('PushPlus Success:', json);
+        }
+    } catch (e) {
+        console.error('PushPlus Fetch Failed:', e);
+    }
 }
