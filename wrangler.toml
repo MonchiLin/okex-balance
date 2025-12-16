@@ -1,0 +1,17 @@
+name = "okex-balance"
+main = "dist/_worker.js/index.js"
+compatibility_date = "2025-12-15"
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+
+[assets]
+binding = "ASSETS"
+directory = "./dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "okex-trader-db"
+database_id = "b3b71ad8-c7c1-4f92-a017-6f6ebd9a3e78"
+remote = true
+
+[observability]
+enabled = true

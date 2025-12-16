@@ -1,0 +1,10 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { Dashboard } from '../components/react/Dashboard';
+---
+
+<Layout title="OKX Trader Tracker">
+	<main class="min-h-screen bg-gray-900 text-white">
+		<Dashboard client:load />
+	</main>
+</Layout>
