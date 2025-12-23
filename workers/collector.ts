@@ -45,6 +45,7 @@ type OkxLeadTraderRow = {
     avatarUrl: string;
     traderInsts: string[];
     aum: number;
+    pnl: number;
 };
 
 type OkxStatsRow = {
@@ -56,6 +57,9 @@ type OkxStatsRow = {
     investAmt: number;
     curCopyTraderPnl: number;
 };
+
+// Combined stats type including traderAsset from priapi
+type OkxStatsWithAsset = OkxStatsRow & { traderAsset: number };
 
 async function collectWatched(env: Env) {
     if (!env.DB) throw new Error('Missing D1 binding `DB`.');
@@ -78,15 +82,18 @@ async function collectWatched(env: Env) {
     const [leadMap, statsList, history5m, history1h, history24h] = await Promise.all([
         fetchLeadTraderMap(watched),
         mapLimit(watched, 2, async (instId) => {
-            const stats = await fetchPublicStats(instId);
-            return { instId, stats };
+            const [stats, traderAsset] = await Promise.all([
+                fetchPublicStats(instId),
+                fetchTradeData(instId)
+            ]);
+            return { instId, stats: { ...stats, traderAsset } };
         }),
         fetchSnapshot(env, watched, bucket - bucketMs),      // 5 min ago
         fetchSnapshot(env, watched, bucket - 12 * bucketMs), // 1 hour ago
         fetchSnapshot(env, watched, bucket - 24 * 12 * bucketMs) // 24 hours ago
     ]);
 
-    const statsMap = new Map(statsList.map((x) => [x.instId, x.stats]));
+    const statsMap = new Map<string, OkxStatsWithAsset>(statsList.map((x) => [x.instId, x.stats]));
 
     // --- Change Detection Logic ---
     const traderAlerts = new Map<string, string[]>();
@@ -96,7 +103,9 @@ async function collectWatched(env: Env) {
         const stats = statsMap.get(instId);
         if (!lead || !stats) continue;
 
-        const currentAum = lead.aum + stats.investAmt; // totalAum
+        // Use traderAsset (accurate value from priapi) for display and calculations
+        // lead.aum is "Scale AUM" (copier funds), stats.traderAsset is "Trader Assets"
+        const currentTotalAum = lead.aum + stats.traderAsset;
         const currentUsers = lead.copyTraderNum; // (unused but kept for ref)
 
         if (!traderAlerts.has(instId)) {
@@ -105,11 +114,11 @@ async function collectWatched(env: Env) {
         const msgs = traderAlerts.get(instId)!;
 
         // Check 5 min change
-        checkChange(msgs, '5分钟', currentAum, lead.aum, history5m.get(instId));
+        checkChange(msgs, '5分钟', currentTotalAum, lead.aum, history5m.get(instId));
         // Check 1 hour change
-        checkChange(msgs, '1小时', currentAum, lead.aum, history1h.get(instId));
+        checkChange(msgs, '1小时', currentTotalAum, lead.aum, history1h.get(instId));
         // Check 24 hour change
-        checkChange(msgs, '24小时', currentAum, lead.aum, history24h.get(instId));
+        checkChange(msgs, '24小时', currentTotalAum, lead.aum, history24h.get(instId));
     }
 
     // Filter out empty traders
@@ -153,8 +162,8 @@ async function collectWatched(env: Env) {
 
     const stmtMetrics = env.DB.prepare(
         `INSERT INTO watched_trader_metrics
-            (instId, timestamp, ccy, aum, investAmt, curCopyTraderPnl, winRatio, profitDays, lossDays, avgSubPosNotional, uTime)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (instId, timestamp, ccy, aum, investAmt, curCopyTraderPnl, winRatio, profitDays, lossDays, avgSubPosNotional, leadPnl, uTime)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(instId, timestamp) DO UPDATE SET
             ccy=excluded.ccy,
             aum=excluded.aum,
@@ -164,6 +173,7 @@ async function collectWatched(env: Env) {
             profitDays=excluded.profitDays,
             lossDays=excluded.lossDays,
             avgSubPosNotional=excluded.avgSubPosNotional,
+            leadPnl=excluded.leadPnl,
             uTime=excluded.uTime`
     );
 
@@ -196,12 +206,13 @@ async function collectWatched(env: Env) {
                 bucket,
                 stats.ccy,
                 lead.aum,
-                stats.investAmt,
+                stats.traderAsset, // Use traderAsset (accurate value) instead of raw investAmt
                 stats.curCopyTraderPnl,
                 stats.winRatio,
                 stats.profitDays,
                 stats.lossDays,
                 stats.avgSubPosNotional,
+                0, // leadPnl is now obsolete, use 0 as placeholder
                 now
             )
         );
@@ -219,21 +230,21 @@ async function collectWatched(env: Env) {
 
 // --- Helper Functions for Detection ---
 
-type Snapshot = { aum: number; investAmt: number; copyTraderNum: number };
+type Snapshot = { aum: number; investAmt: number; pnl: number; copyTraderNum: number };
 
 async function fetchSnapshot(env: Env, instIds: string[], timestamp: number): Promise<Map<string, Snapshot>> {
     if (instIds.length === 0) return new Map();
     // we only have metrics, so we construct snapshot with available data
     const placeholders = instIds.map(() => '?').join(',');
     const stmt = env.DB.prepare(
-        `SELECT instId, aum, investAmt FROM watched_trader_metrics WHERE timestamp = ? AND instId IN (${placeholders})`
+        `SELECT instId, aum, investAmt, leadPnl FROM watched_trader_metrics WHERE timestamp = ? AND instId IN (${placeholders})`
     ).bind(timestamp, ...instIds);
 
     const res = await stmt.all();
     const map = new Map<string, Snapshot>();
     if (res.results) {
         for (const r of res.results as any[]) {
-            map.set(r.instId, { aum: r.aum, investAmt: r.investAmt, copyTraderNum: 0 });
+            map.set(r.instId, { aum: r.aum, investAmt: r.investAmt, pnl: r.leadPnl || 0, copyTraderNum: 0 });
         }
     }
     return map;
@@ -251,8 +262,8 @@ function checkChange(
         return;
     }
 
-    // 1. Total AUM Check
-    const oldTotalAum = old.aum + old.investAmt;
+    // 1. Total AUM Check (Scale + Invest + PnL)
+    const oldTotalAum = old.aum + old.investAmt + (old.pnl || 0);
     const deltaTotal = currentTotalAum - oldTotalAum;
 
     if (oldTotalAum > 0) {
@@ -318,6 +329,8 @@ async function fetchLeadTraderMap(instIds: string[]): Promise<Map<string, OkxLea
             const maxCopyTraderNum = parseOkxInt(t?.maxCopyTraderNum, `ranks[${i}].maxCopyTraderNum`);
             const avatarUrl = assertNonEmptyString(t?.portLink, `ranks[${i}].portLink`);
             const aum = parseOkxNumber(t?.aum, `ranks[${i}].aum`);
+            const pnl = parseOkxNumber(t?.pnl, `ranks[${i}].pnl`);
+            if (pnl !== 0) console.log(`[LeadMap] ${instId} (${nickName}) pnl=${pnl}`);
 
             const traderInsts = t?.traderInsts;
             if (!Array.isArray(traderInsts) || traderInsts.some((x: any) => typeof x !== 'string' || x.length === 0)) {
@@ -333,7 +346,8 @@ async function fetchLeadTraderMap(instIds: string[]): Promise<Map<string, OkxLea
                 maxCopyTraderNum,
                 avatarUrl,
                 traderInsts,
-                aum
+                aum,
+                pnl
             });
         }
 
@@ -367,6 +381,52 @@ async function fetchPublicStats(instId: string): Promise<OkxStatsRow> {
     };
 }
 
+/**
+ * Fetch accurate "Trader Assets" from priapi endpoint.
+ * This endpoint returns the exact value shown on the OKX website.
+ * URL: /priapi/v5/ecotrade/public/trader/trade-data
+ */
+async function fetchTradeData(instId: string): Promise<number> {
+    const url = `https://www.okx.com/priapi/v5/ecotrade/public/trader/trade-data?latestNum=0&bizType=SWAP&uniqueName=${instId}`;
+
+    console.log(`Fetching trade-data: ${url}`);
+
+    const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+            Accept: 'application/json',
+            'Accept-Language': 'zh-CN',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`OKX trade-data API Error: ${response.status} - ${text}`);
+    }
+
+    const json: any = await response.json();
+    if (json.code !== '0' && json.code !== 0) {
+        throw new Error(`OKX trade-data API Business Error: ${JSON.stringify(json)}`);
+    }
+
+    // Find the "asset" item in nonPeriodicPart
+    const nonPeriodic = json?.data?.[0]?.nonPeriodicPart;
+    if (!Array.isArray(nonPeriodic)) {
+        throw new Error(`Missing trade-data.nonPeriodicPart for ${instId}`);
+    }
+
+    const assetItem = nonPeriodic.find((item: any) => item.functionId === 'asset');
+    if (!assetItem) {
+        throw new Error(`Missing "asset" field in trade-data for ${instId}`);
+    }
+
+    const traderAsset = parseOkxNumber(assetItem.value, `trade-data.asset for ${instId}`);
+    console.log(`[TradeData] ${instId} traderAsset=${traderAsset}`);
+
+    return traderAsset;
+}
+
 async function fetchOkxJson(path: string, params: URLSearchParams): Promise<any> {
     const domain = 'https://www.okx.com';
     const url = `${domain}${path}?${params.toString()}`;
@@ -377,7 +437,8 @@ async function fetchOkxJson(path: string, params: URLSearchParams): Promise<any>
         method: 'GET',
         headers: {
             Accept: 'application/json',
-            'Accept-Language': 'zh-CN'
+            'Accept-Language': 'zh-CN',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
     });
 

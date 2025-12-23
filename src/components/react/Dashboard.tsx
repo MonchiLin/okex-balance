@@ -36,7 +36,7 @@ export const Dashboard: React.FC = () => {
         instId: string;
         watched: boolean;
         info: { nickName: string; ccy: string };
-        series: { timestamp: number; aum: number; investAmt: number }[];
+        series: { timestamp: number; aum: number; investAmt: number; leadPnl?: number }[];
     } | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState<string | null>(null);
@@ -376,8 +376,8 @@ export const Dashboard: React.FC = () => {
 
                                                 data={downsampleSeries(detail.series, interval).map((s) => ({
                                                     ...s,
-                                                    // "Trader Assets" = investAmt
-                                                    investAmt: s.investAmt,
+                                                    // "Trader Assets" = investAmt + leadPnl
+                                                    investAmt: s.investAmt + (s.leadPnl || 0),
                                                     timeLabel: new Date(s.timestamp).toLocaleString()
                                                 }))}
                                             >
@@ -429,9 +429,9 @@ export const Dashboard: React.FC = () => {
 };
 
 function downsampleSeries(
-    series: { timestamp: number; aum: number; investAmt: number }[],
+    series: { timestamp: number; aum: number; investAmt: number; leadPnl?: number }[],
     intervalStr: string
-): { timestamp: number; aum: number; investAmt: number }[] {
+): { timestamp: number; aum: number; investAmt: number; leadPnl?: number }[] {
     if (intervalStr === '5m') return series;
 
     const msMap: Record<string, number> = {
@@ -448,7 +448,7 @@ function downsampleSeries(
     const intervalMs = msMap[intervalStr];
     if (!intervalMs) return series;
 
-    const groups = new Map<number, { timestamp: number; aum: number; investAmt: number }>();
+    const groups = new Map<number, { timestamp: number; aum: number; investAmt: number; leadPnl?: number }>();
 
     for (const p of series) {
         // Use the end of the bucket as the key to align with standard charting practices

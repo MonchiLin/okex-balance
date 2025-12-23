@@ -25,6 +25,7 @@ export type WatchedTrader = {
         profitDays: number;
         lossDays: number;
         avgSubPosNotional: number;
+        leadPnl?: number;
         uTime: number;
     };
 };
@@ -38,7 +39,7 @@ interface TraderCardProps {
 
 export const TraderCard: React.FC<TraderCardProps> = ({ trader, canToggle = false, onToggle, onOpen }) => {
     const { info, metrics } = trader;
-    // Align with OKX official definition: "Trader Assets" = investAmt (own funds)
+    // investAmt now contains the accurate "Trader Assets" value from priapi
     const traderAsset = metrics.investAmt;
 
     const requiredNumbers: Array<[unknown, string]> = [

@@ -50,7 +50,7 @@ export const GET: APIRoute = async ({ locals, params, request }) => {
 
     const metricsRes = await db
       .prepare(
-        `SELECT timestamp, ccy, aum, investAmt, curCopyTraderPnl, winRatio, profitDays, lossDays, avgSubPosNotional, uTime
+        `SELECT timestamp, ccy, aum, investAmt, curCopyTraderPnl, winRatio, profitDays, lossDays, avgSubPosNotional, leadPnl, uTime
          FROM watched_trader_metrics
          WHERE instId = ?
          ORDER BY timestamp DESC
@@ -85,6 +85,7 @@ export const GET: APIRoute = async ({ locals, params, request }) => {
         profitDays: toInt(r.profitDays, 'profitDays'),
         lossDays: toInt(r.lossDays, 'lossDays'),
         avgSubPosNotional: toNumber(r.avgSubPosNotional, 'avgSubPosNotional'),
+        leadPnl: r.leadPnl ? toNumber(r.leadPnl, 'leadPnl') : 0,
         uTime: toInt(r.uTime, 'uTime')
       }))
       .reverse();

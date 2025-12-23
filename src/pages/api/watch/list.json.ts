@@ -56,6 +56,7 @@ export const GET: APIRoute = async ({ locals }) => {
           m.profitDays AS profitDays,
           m.lossDays AS lossDays,
           m.avgSubPosNotional AS avgSubPosNotional,
+          m.leadPnl AS leadPnl,
           m.uTime AS metricsUTime
         FROM watched_traders w
         JOIN trader_info i ON i.instId = w.instId
@@ -101,6 +102,7 @@ export const GET: APIRoute = async ({ locals }) => {
           profitDays: toInt(r.profitDays, `profitDays for ${instId}`),
           lossDays: toInt(r.lossDays, `lossDays for ${instId}`),
           avgSubPosNotional: toNumber(r.avgSubPosNotional, `avgSubPosNotional for ${instId}`),
+          leadPnl: r.leadPnl ? toNumber(r.leadPnl, `leadPnl for ${instId}`) : 0,
           uTime: toInt(r.metricsUTime, `metricsUTime for ${instId}`)
         }
       };
