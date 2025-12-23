@@ -38,7 +38,8 @@ interface TraderCardProps {
 
 export const TraderCard: React.FC<TraderCardProps> = ({ trader, canToggle = false, onToggle, onOpen }) => {
     const { info, metrics } = trader;
-    const totalAsset = metrics.aum + metrics.investAmt;
+    // Align with OKX official definition: "Trader Assets" = investAmt (own funds)
+    const traderAsset = metrics.investAmt;
 
     const requiredNumbers: Array<[unknown, string]> = [
         [info.leadDays, 'leadDays'],
@@ -132,7 +133,7 @@ export const TraderCard: React.FC<TraderCardProps> = ({ trader, canToggle = fals
                 <div>
                     <p className="text-xs text-gray-400 mb-1">交易员带单资产</p>
                     <div className="text-sm font-semibold text-purple-300">
-                        {formatAmount(totalAsset, ccy)}
+                        {formatAmount(traderAsset, ccy)}
                     </div>
                 </div>
                 <div>

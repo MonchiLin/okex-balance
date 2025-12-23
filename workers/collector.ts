@@ -75,14 +75,15 @@ async function collectWatched(env: Env) {
     const bucket = Math.floor(now / bucketMs) * bucketMs;
 
     // Parallel Fetch: Lead Map + Stats List + History Snapshots
-    const [leadMap, statsList, history5m, history1h] = await Promise.all([
+    const [leadMap, statsList, history5m, history1h, history24h] = await Promise.all([
         fetchLeadTraderMap(watched),
         mapLimit(watched, 2, async (instId) => {
             const stats = await fetchPublicStats(instId);
             return { instId, stats };
         }),
         fetchSnapshot(env, watched, bucket - bucketMs),      // 5 min ago
-        fetchSnapshot(env, watched, bucket - 12 * bucketMs)  // 1 hour ago
+        fetchSnapshot(env, watched, bucket - 12 * bucketMs), // 1 hour ago
+        fetchSnapshot(env, watched, bucket - 24 * 12 * bucketMs) // 24 hours ago
     ]);
 
     const statsMap = new Map(statsList.map((x) => [x.instId, x.stats]));
@@ -107,6 +108,8 @@ async function collectWatched(env: Env) {
         checkChange(msgs, '5分钟', currentAum, lead.aum, history5m.get(instId));
         // Check 1 hour change
         checkChange(msgs, '1小时', currentAum, lead.aum, history1h.get(instId));
+        // Check 24 hour change
+        checkChange(msgs, '24小时', currentAum, lead.aum, history24h.get(instId));
     }
 
     // Filter out empty traders

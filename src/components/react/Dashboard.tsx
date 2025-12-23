@@ -41,6 +41,7 @@ export const Dashboard: React.FC = () => {
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState<string | null>(null);
     const [refreshing, setRefreshing] = useState(false);
+    const [interval, setInterval] = useState<string>('5m'); // Default 5m
 
     const load = async () => {
         const [watchedData, topData] = await Promise.all([
@@ -298,6 +299,7 @@ export const Dashboard: React.FC = () => {
                     setDetail(null);
                     setDetailError(null);
                     setDetailLoading(false);
+                    setInterval('5m');
                 }
             }}>
                 <Dialog.Portal>
@@ -331,28 +333,51 @@ export const Dashboard: React.FC = () => {
                             <div className="text-red-400 text-sm">{detailError}</div>
                         ) : detail ? (
                             <Tabs.Root defaultValue="total" className="flex flex-col h-full">
-                                <Tabs.List className="inline-flex space-x-2 border-b border-gray-700 mb-4">
-                                    <Tabs.Trigger
-                                        value="total"
-                                        className="px-3 py-2 text-sm text-gray-300 data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-blue-500"
-                                    >
-                                        交易员带单资产
-                                    </Tabs.Trigger>
-                                    <Tabs.Trigger
-                                        value="scale"
-                                        className="px-3 py-2 text-sm text-gray-300 data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-blue-500"
-                                    >
-                                        带单规模
-                                    </Tabs.Trigger>
-                                </Tabs.List>
+                                <div className="flex items-center justify-between border-b border-gray-700 mb-4 pb-2">
+                                    <Tabs.List className="inline-flex space-x-2">
+                                        <Tabs.Trigger
+                                            value="total"
+                                            className="px-3 py-2 text-sm text-gray-300 data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-blue-500"
+                                        >
+                                            交易员带单资产
+                                        </Tabs.Trigger>
+                                        <Tabs.Trigger
+                                            value="scale"
+                                            className="px-3 py-2 text-sm text-gray-300 data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-blue-500"
+                                        >
+                                            带单规模
+                                        </Tabs.Trigger>
+                                    </Tabs.List>
+
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs text-gray-400">周期:</span>
+                                        <select
+                                            value={interval}
+                                            onChange={(e) => setInterval(e.target.value)}
+                                            className="bg-gray-800 text-xs text-white border border-gray-600 rounded px-2 py-1 outline-none focus:border-blue-500"
+                                        >
+                                            <option value="5m">原始 (5m)</option>
+                                            <option value="15m">15 分钟</option>
+                                            <option value="30m">30 分钟</option>
+                                            <option value="1h">1 小时</option>
+                                            <option value="2h">2 小时</option>
+                                            <option value="4h">4 小时</option>
+                                            <option value="8h">8 小时</option>
+                                            <option value="1d">1 天</option>
+                                            <option value="1w">1 周</option>
+                                        </select>
+                                    </div>
+                                </div>
 
                                 <Tabs.Content value="total" className="flex-1">
                                     <div className="h-80">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <LineChart
-                                                data={detail.series.map((s) => ({
+
+                                                data={downsampleSeries(detail.series, interval).map((s) => ({
                                                     ...s,
-                                                    totalAum: s.aum + s.investAmt,
+                                                    // "Trader Assets" = investAmt
+                                                    investAmt: s.investAmt,
                                                     timeLabel: new Date(s.timestamp).toLocaleString()
                                                 }))}
                                             >
@@ -364,7 +389,7 @@ export const Dashboard: React.FC = () => {
                                                     labelFormatter={(label) => label}
                                                     formatter={(value: number | undefined) => [formatAmount(value ?? 0, detail.info.ccy), '交易员带单资产']}
                                                 />
-                                                <Line type="monotone" dataKey="totalAum" stroke="#60A5FA" dot={false} strokeWidth={2} />
+                                                <Line type="monotone" dataKey="investAmt" stroke="#60A5FA" dot={false} strokeWidth={2} />
                                             </LineChart>
                                         </ResponsiveContainer>
                                     </div>
@@ -374,7 +399,7 @@ export const Dashboard: React.FC = () => {
                                     <div className="h-80">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <LineChart
-                                                data={detail.series.map((s) => ({
+                                                data={downsampleSeries(detail.series, interval).map((s) => ({
                                                     ...s,
                                                     timeLabel: new Date(s.timestamp).toLocaleString()
                                                 }))}
@@ -402,3 +427,38 @@ export const Dashboard: React.FC = () => {
         </div >
     );
 };
+
+function downsampleSeries(
+    series: { timestamp: number; aum: number; investAmt: number }[],
+    intervalStr: string
+): { timestamp: number; aum: number; investAmt: number }[] {
+    if (intervalStr === '5m') return series;
+
+    const msMap: Record<string, number> = {
+        '15m': 15 * 60 * 1000,
+        '30m': 30 * 60 * 1000,
+        '1h': 60 * 60 * 1000,
+        '2h': 2 * 60 * 60 * 1000,
+        '4h': 4 * 60 * 60 * 1000,
+        '8h': 8 * 60 * 60 * 1000,
+        '1d': 24 * 60 * 60 * 1000,
+        '1w': 7 * 24 * 60 * 60 * 1000
+    };
+
+    const intervalMs = msMap[intervalStr];
+    if (!intervalMs) return series;
+
+    const groups = new Map<number, { timestamp: number; aum: number; investAmt: number }>();
+
+    for (const p of series) {
+        // Use the end of the bucket as the key to align with standard charting practices
+        // or effectively just "floor" properly.
+        const key = Math.floor(p.timestamp / intervalMs) * intervalMs;
+
+        // We always overwrite, so the last point in the interval becomes the representative point (Close value)
+        groups.set(key, p);
+    }
+
+    return Array.from(groups.values()).sort((a, b) => a.timestamp - b.timestamp);
+}
+
