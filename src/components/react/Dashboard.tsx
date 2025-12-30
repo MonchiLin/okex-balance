@@ -141,19 +141,16 @@ export const Dashboard: React.FC = () => {
         }
     };
 
-    const openTrader = async (id: string, name: string, isWatched: boolean) => {
-        setSelectedTrader({ instId: id, name, watched: isWatched });
-        setModalOpen(true);
-        setDetail(null);
-        setDetailError(null);
+    const loadTraderDetail = async (id: string, intervalParam: string) => {
         setDetailLoading(true);
+        setDetailError(null);
         try {
             const data = await fetchJson<{
                 instId: string;
                 watched: boolean;
                 info: { nickName: string; ccy: string };
                 series: { timestamp: number; aum: number; investAmt: number }[];
-            }>(`/api/trader/${encodeURIComponent(id)}.json`);
+            }>(`/api/trader/${encodeURIComponent(id)}.json?interval=${intervalParam}`);
             setDetail(data);
         } catch (err) {
             console.error(err);
@@ -163,6 +160,20 @@ export const Dashboard: React.FC = () => {
             setDetailLoading(false);
         }
     };
+
+    const openTrader = async (id: string, name: string, isWatched: boolean) => {
+        setSelectedTrader({ instId: id, name, watched: isWatched });
+        setModalOpen(true);
+        setDetail(null);
+        await loadTraderDetail(id, interval);
+    };
+
+    // Reload data when interval changes
+    React.useEffect(() => {
+        if (selectedTrader && modalOpen) {
+            loadTraderDetail(selectedTrader.instId, interval);
+        }
+    }, [interval]);
 
     if (loading) {
         return (
@@ -373,8 +384,7 @@ export const Dashboard: React.FC = () => {
                                     <div className="h-80">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <LineChart
-
-                                                data={downsampleSeries(detail.series, interval).map((s) => ({
+                                                data={detail.series.map((s) => ({
                                                     ...s,
                                                     // "Trader Assets" = investAmt + leadPnl
                                                     investAmt: s.investAmt + (s.leadPnl || 0),
@@ -399,7 +409,7 @@ export const Dashboard: React.FC = () => {
                                     <div className="h-80">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <LineChart
-                                                data={downsampleSeries(detail.series, interval).map((s) => ({
+                                                data={detail.series.map((s) => ({
                                                     ...s,
                                                     timeLabel: new Date(s.timestamp).toLocaleString()
                                                 }))}
@@ -428,37 +438,5 @@ export const Dashboard: React.FC = () => {
     );
 };
 
-function downsampleSeries(
-    series: { timestamp: number; aum: number; investAmt: number; leadPnl?: number }[],
-    intervalStr: string
-): { timestamp: number; aum: number; investAmt: number; leadPnl?: number }[] {
-    if (intervalStr === '5m') return series;
-
-    const msMap: Record<string, number> = {
-        '15m': 15 * 60 * 1000,
-        '30m': 30 * 60 * 1000,
-        '1h': 60 * 60 * 1000,
-        '2h': 2 * 60 * 60 * 1000,
-        '4h': 4 * 60 * 60 * 1000,
-        '8h': 8 * 60 * 60 * 1000,
-        '1d': 24 * 60 * 60 * 1000,
-        '1w': 7 * 24 * 60 * 60 * 1000
-    };
-
-    const intervalMs = msMap[intervalStr];
-    if (!intervalMs) return series;
-
-    const groups = new Map<number, { timestamp: number; aum: number; investAmt: number; leadPnl?: number }>();
-
-    for (const p of series) {
-        // Use the end of the bucket as the key to align with standard charting practices
-        // or effectively just "floor" properly.
-        const key = Math.floor(p.timestamp / intervalMs) * intervalMs;
-
-        // We always overwrite, so the last point in the interval becomes the representative point (Close value)
-        groups.set(key, p);
-    }
-
-    return Array.from(groups.values()).sort((a, b) => a.timestamp - b.timestamp);
-}
+// Downsampling is now handled by the API, so this function is removed
 
