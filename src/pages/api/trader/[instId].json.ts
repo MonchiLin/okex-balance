@@ -138,7 +138,12 @@ export const GET: APIRoute = async ({ locals, params, request }) => {
 
     return new Response(JSON.stringify({ instId, watched, info, series }, null, 2), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        // Cache for 90 seconds, allow serving stale for 30s while revalidating
+        // Data updates every 5 minutes, so 90s cache is safe
+        'Cache-Control': 'public, max-age=90, stale-while-revalidate=30'
+      }
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

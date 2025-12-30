@@ -18,12 +18,29 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     return data as T;
 }
 
+// Cache entry type
+type CacheEntry = {
+    data: {
+        instId: string;
+        watched: boolean;
+        info: { nickName: string; ccy: string };
+        series: { timestamp: number; aum: number; investAmt: number }[];
+    };
+    timestamp: number; // Cache creation time
+};
+
+// Cache TTL: 2 minutes (less than the 5-minute data collection interval)
+const CACHE_TTL_MS = 2 * 60 * 1000;
+
 export const Dashboard: React.FC = () => {
     const [watched, setWatched] = useState<WatchedTrader[] | null>(null);
     const [top, setTop] = useState<LeadTrader[]>([]);
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    // Cache: Map<instId:interval, CacheEntry>
+    const cacheRef = React.useRef<Map<string, CacheEntry>>(new Map());
 
     const [password, setPassword] = useState('');
     const [authed, setAuthed] = useState(false);
@@ -142,6 +159,19 @@ export const Dashboard: React.FC = () => {
     };
 
     const loadTraderDetail = async (id: string, intervalParam: string) => {
+        const cacheKey = `${id}:${intervalParam}`;
+        const now = Date.now();
+
+        // Check cache first
+        const cached = cacheRef.current.get(cacheKey);
+        if (cached && (now - cached.timestamp) < CACHE_TTL_MS) {
+            // Cache hit and still valid
+            console.log(`[Cache] Hit for ${cacheKey}, age: ${Math.round((now - cached.timestamp) / 1000)}s`);
+            setDetail(cached.data);
+            setDetailLoading(false);
+            return;
+        }
+
         setDetailLoading(true);
         setDetailError(null);
         try {
@@ -151,6 +181,23 @@ export const Dashboard: React.FC = () => {
                 info: { nickName: string; ccy: string };
                 series: { timestamp: number; aum: number; investAmt: number }[];
             }>(`/api/trader/${encodeURIComponent(id)}.json?interval=${intervalParam}`);
+
+            // Store in cache
+            cacheRef.current.set(cacheKey, {
+                data,
+                timestamp: now
+            });
+
+            // Clean up old cache entries (keep cache size manageable)
+            if (cacheRef.current.size > 20) {
+                const entries = Array.from(cacheRef.current.entries());
+                entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+                // Remove oldest 5 entries
+                for (let i = 0; i < 5; i++) {
+                    cacheRef.current.delete(entries[i][0]);
+                }
+            }
+
             setDetail(data);
         } catch (err) {
             console.error(err);
