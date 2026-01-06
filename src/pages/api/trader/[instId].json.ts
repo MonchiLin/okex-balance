@@ -12,7 +12,8 @@ const INTERVAL_CONFIG: Record<string, { bucketMs: number; limitDays: number }> =
   '4h': { bucketMs: 4 * 60 * 60 * 1000, limitDays: 28 }, // 4h buckets, 28 days (~168 points)
   '8h': { bucketMs: 8 * 60 * 60 * 1000, limitDays: 56 }, // 8h buckets, 56 days (~168 points)
   '1d': { bucketMs: 24 * 60 * 60 * 1000, limitDays: 90 }, // 1d buckets, 90 days (~90 points)
-  '1w': { bucketMs: 7 * 24 * 60 * 60 * 1000, limitDays: 365 } // 1w buckets, 365 days (~52 points)
+  '1w': { bucketMs: 7 * 24 * 60 * 60 * 1000, limitDays: 365 }, // 1w buckets, 365 days (~52 points)
+  '1M': { bucketMs: 30 * 24 * 60 * 60 * 1000, limitDays: 730 } // 1M buckets, 2 years
 };
 
 function getDb(locals: App.Locals): D1Database {

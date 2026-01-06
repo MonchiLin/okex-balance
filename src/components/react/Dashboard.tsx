@@ -58,7 +58,7 @@ export const Dashboard: React.FC = () => {
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState<string | null>(null);
     const [refreshing, setRefreshing] = useState(false);
-    const [interval, setInterval] = useState<string>('5m'); // Default 5m
+    const [interval, setInterval] = useState<string>('1w'); // Default 1w
 
     const load = async () => {
         const [watchedData, topData] = await Promise.all([
@@ -357,7 +357,7 @@ export const Dashboard: React.FC = () => {
                     setDetail(null);
                     setDetailError(null);
                     setDetailLoading(false);
-                    setInterval('5m');
+                    setInterval('1w');
                 }
             }}>
                 <Dialog.Portal>
@@ -423,6 +423,7 @@ export const Dashboard: React.FC = () => {
                                             <option value="8h">8 小时</option>
                                             <option value="1d">1 天</option>
                                             <option value="1w">1 周</option>
+                                            <option value="1M">1 月</option>
                                         </select>
                                     </div>
                                 </div>
